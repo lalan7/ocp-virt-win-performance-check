@@ -69,6 +69,8 @@ if ($hypervisorPresent) {
     Write-Check "Hypervisor detected" "PASS" "Guest sees a hypervisor (Hyper-V interface)"
 } else {
     Write-Check "Hypervisor detected" "FAIL" "No hypervisor detected; enlightenments inactive"
+    Write-Host "    KCS: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
+    Write-Host "    Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
 }
 
 $hvInfo = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters" -ErrorAction SilentlyContinue
@@ -326,7 +328,9 @@ Write-Host ""
 
 if ($failed -gt 0) {
     Write-Host "  CRITICAL: Fix failed checks before running production workloads." -ForegroundColor Red
-    Write-Host "  Reference: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
+    Write-Host "  Configure Hyper-V enlightenments:" -ForegroundColor Gray
+    Write-Host "    KCS: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
+    Write-Host "    Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
 }
 
 if ($warned -gt 0) {
