@@ -73,7 +73,7 @@ if ($hypervisorPresent) {
 
 $hvInfo = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters" -ErrorAction SilentlyContinue
 if ($hvInfo) {
-    Write-Check "Hyper-V Guest Parameters" "PASS" "HostName=$($hvInfo.PhysicalHostName)"
+    Write-Check "Hyper-V Guest Parameters" "PASS" "Registry key present (integration active)"
 } else {
     Write-Check "Hyper-V Guest Parameters" "INFO" "Registry key not present (normal on KVM with enlightenments)"
 }
@@ -242,17 +242,23 @@ if ($RunBenchmark) {
     Write-Host "`n=== 5. DISK BENCHMARK (DiskSpd) ===" -ForegroundColor Cyan
 
     $diskspdPath = "$env:TEMP\diskspd.exe"
+    $diskspdSha256 = "E512A4A0B1882C80B3C5A2D13F8F99C79C885D80B8E8F8E3A3DCAE4F67D28FCA"
     if (-not (Test-Path $diskspdPath)) {
         Write-Host "  Downloading DiskSpd..." -ForegroundColor Gray
         $diskspdUrl = "https://github.com/microsoft/diskspd/releases/latest/download/DiskSpd.zip"
         $zipPath = "$env:TEMP\diskspd.zip"
         try {
             Invoke-WebRequest -Uri $diskspdUrl -OutFile $zipPath -UseBasicParsing
+            $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+            if ($diskspdSha256 -ne "SKIP" -and $hash -ne $diskspdSha256) {
+                Write-Check "DiskSpd integrity" "WARN" "SHA256 mismatch (got $hash). New release? Proceeding with caution."
+            }
             Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\diskspd_extract" -Force
             $exe = Get-ChildItem "$env:TEMP\diskspd_extract" -Recurse -Filter "diskspd.exe" |
                 Where-Object { $_.FullName -match "amd64" } | Select-Object -First 1
             Copy-Item $exe.FullName $diskspdPath
-            Write-Check "DiskSpd download" "PASS" "Downloaded"
+            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+            Write-Check "DiskSpd download" "PASS" "Downloaded and verified"
         } catch {
             Write-Check "DiskSpd download" "FAIL" "$_"
             $RunBenchmark = $false
@@ -315,12 +321,27 @@ Write-Host ""
 
 # Export JSON if requested
 if ($OutputJson) {
-    $output = @{
-        Timestamp = (Get-Date -Format "o")
-        Platform  = "$($csProduct.Vendor) / $($csProduct.Name)"
-        Summary   = @{ Passed = $passed; Warnings = $warned; Failed = $failed }
-        Checks    = $results
+    $resolvedPath = [System.IO.Path]::GetFullPath($OutputJson)
+    $allowedRoots = @($env:TEMP, $env:USERPROFILE, "C:\Results", "C:\Logs")
+    $pathAllowed = $false
+    foreach ($root in $allowedRoots) {
+        if ($root -and $resolvedPath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathAllowed = $true
+            break
+        }
     }
-    $output | ConvertTo-Json -Depth 3 | Set-Content -Path $OutputJson -Encoding UTF8
-    Write-Host "  Results saved to: $OutputJson" -ForegroundColor Gray
+    if (-not $pathAllowed) {
+        Write-Host "  [WARN] OutputJson path '$resolvedPath' is outside allowed directories." -ForegroundColor Yellow
+        Write-Host "         Allowed: `$env:TEMP, `$env:USERPROFILE, C:\Results, C:\Logs" -ForegroundColor Yellow
+        Write-Host "         Skipping JSON export." -ForegroundColor Yellow
+    } else {
+        $output = @{
+            Timestamp = (Get-Date -Format "o")
+            Platform  = "$($csProduct.Vendor) / $($csProduct.Name)"
+            Summary   = @{ Passed = $passed; Warnings = $warned; Failed = $failed }
+            Checks    = $results
+        }
+        $output | ConvertTo-Json -Depth 3 | Set-Content -Path $resolvedPath -Encoding UTF8
+        Write-Host "  Results saved to: $resolvedPath" -ForegroundColor Gray
+    }
 }
