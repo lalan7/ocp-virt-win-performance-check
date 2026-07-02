@@ -267,25 +267,50 @@ if ($RunBenchmark) {
 
         Write-Host "  Running sequential read 128K (${BenchmarkDuration}s)..." -ForegroundColor Gray
         $seqRead = & $diskspdPath -b128K -d$BenchmarkDuration -o4 -t2 -r -w0 -Sh -c1G $testFile 2>&1 | Out-String
-        $seqReadMBs = if ($seqRead -match "total:\s+\d+\s+\|\s+\d+\s+\|\s+([\d.]+)") { $Matches[1] } else { "N/A" }
+        $seqReadMBs = "N/A"
+        if ($seqRead -match "Read IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
+            $seqReadMBs = "$($Matches[1]) MB/s ($($Matches[2]) IOPS)"
+        } elseif ($seqRead -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
+            $seqReadMBs = "$($Matches[2]) MB/s ($($Matches[3]) IOPS)"
+        }
 
         Write-Host "  Running random read 4K (${BenchmarkDuration}s)..." -ForegroundColor Gray
         $randRead = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w0 -Sh -c1G $testFile 2>&1 | Out-String
-        $randReadIOPS = if ($randRead -match "total:\s+\d+\s+\|\s+(\d+\.\d+)") { $Matches[1] } else { "N/A" }
+        $randReadIOPS = "N/A"
+        if ($randRead -match "Read IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
+            $randReadIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
+        } elseif ($randRead -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
+            $randReadIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        }
 
         Write-Host "  Running random write 4K (${BenchmarkDuration}s)..." -ForegroundColor Gray
         $randWrite = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w100 -Sh -c1G $testFile 2>&1 | Out-String
-        $randWriteIOPS = if ($randWrite -match "total:\s+\d+\s+\|\s+(\d+\.\d+)") { $Matches[1] } else { "N/A" }
+        $randWriteIOPS = "N/A"
+        if ($randWrite -match "Write IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
+            $randWriteIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
+        } elseif ($randWrite -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
+            $randWriteIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        }
 
         Write-Host "  Running mixed 4K 70R/30W (${BenchmarkDuration}s)..." -ForegroundColor Gray
         $mixed = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w30 -Sh -c1G $testFile 2>&1 | Out-String
-        $mixedIOPS = if ($mixed -match "total:\s+\d+\s+\|\s+(\d+\.\d+)") { $Matches[1] } else { "N/A" }
+        $mixedIOPS = "N/A"
+        if ($mixed -match "Total IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
+            $mixedIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
+        } elseif ($mixed -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
+            $mixedIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        }
 
         Write-Host ""
-        Write-Check "Seq Read 128K" "INFO" "$seqReadMBs MB/s"
-        Write-Check "Rand Read 4K" "INFO" "$randReadIOPS IOPS"
-        Write-Check "Rand Write 4K" "INFO" "$randWriteIOPS IOPS"
-        Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedIOPS IOPS"
+        Write-Check "Seq Read 128K" "INFO" "$seqReadMBs"
+        Write-Check "Rand Read 4K" "INFO" "$randReadIOPS"
+        Write-Check "Rand Write 4K" "INFO" "$randWriteIOPS"
+        Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedIOPS"
+
+        # Save raw output for debugging if needed
+        $rawOutputPath = "$env:TEMP\diskspd_raw_output.txt"
+        $mixed | Set-Content -Path $rawOutputPath -Encoding UTF8
+        Write-Host "  Raw DiskSpd output saved to: $rawOutputPath" -ForegroundColor Gray
 
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
     }
