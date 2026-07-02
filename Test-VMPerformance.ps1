@@ -299,55 +299,87 @@ if ($RunBenchmark) {
 
     if ($RunBenchmark) {
         $testFile = "$env:TEMP\diskspd_test.dat"
+        $xmlOut = "$env:TEMP\diskspd_result.xml"
 
         Write-Host "  Running sequential read 128K (${BenchmarkDuration}s)..." -ForegroundColor Gray
-        $seqRead = & $diskspdPath -b128K -d$BenchmarkDuration -o4 -t2 -r -w0 -Sh -c1G $testFile 2>&1 | Out-String
-        $seqReadMBs = "N/A"
-        if ($seqRead -match "Read IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
-            $seqReadMBs = "$($Matches[1]) MB/s ($($Matches[2]) IOPS)"
-        } elseif ($seqRead -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
-            $seqReadMBs = "$($Matches[2]) MB/s ($($Matches[3]) IOPS)"
+        & $diskspdPath -b128K -d$BenchmarkDuration -o4 -t2 -r -w0 -Sh -c1G -Rxml $testFile > $xmlOut 2>&1
+        $seqReadResult = "N/A"
+        if (Test-Path $xmlOut) {
+            try {
+                [xml]$xml = Get-Content $xmlOut
+                $tp = $xml.Results.TimeSpan.Latency
+                $readBytes = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadBytes } | Measure-Object -Sum).Sum
+                $duration = [double]$xml.Results.TimeSpan.TestTimeSeconds
+                if ($duration -gt 0 -and $readBytes -gt 0) {
+                    $mbps = [math]::Round($readBytes / $duration / 1MB, 2)
+                    $iops = [math]::Round(($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadCount } | Measure-Object -Sum).Sum / $duration, 0)
+                    $seqReadResult = "$mbps MB/s ($iops IOPS)"
+                }
+            } catch { $seqReadResult = "Parse error: $_" }
         }
 
         Write-Host "  Running random read 4K (${BenchmarkDuration}s)..." -ForegroundColor Gray
-        $randRead = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w0 -Sh -c1G $testFile 2>&1 | Out-String
-        $randReadIOPS = "N/A"
-        if ($randRead -match "Read IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
-            $randReadIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
-        } elseif ($randRead -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
-            $randReadIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w0 -Sh -c1G -Rxml $testFile > $xmlOut 2>&1
+        $randReadResult = "N/A"
+        if (Test-Path $xmlOut) {
+            try {
+                [xml]$xml = Get-Content $xmlOut
+                $readBytes = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadBytes } | Measure-Object -Sum).Sum
+                $readCount = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadCount } | Measure-Object -Sum).Sum
+                $duration = [double]$xml.Results.TimeSpan.TestTimeSeconds
+                if ($duration -gt 0 -and $readCount -gt 0) {
+                    $iops = [math]::Round($readCount / $duration, 0)
+                    $mbps = [math]::Round($readBytes / $duration / 1MB, 2)
+                    $randReadResult = "$iops IOPS ($mbps MB/s)"
+                }
+            } catch { $randReadResult = "Parse error: $_" }
         }
 
         Write-Host "  Running random write 4K (${BenchmarkDuration}s)..." -ForegroundColor Gray
-        $randWrite = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w100 -Sh -c1G $testFile 2>&1 | Out-String
-        $randWriteIOPS = "N/A"
-        if ($randWrite -match "Write IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
-            $randWriteIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
-        } elseif ($randWrite -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
-            $randWriteIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w100 -Sh -c1G -Rxml $testFile > $xmlOut 2>&1
+        $randWriteResult = "N/A"
+        if (Test-Path $xmlOut) {
+            try {
+                [xml]$xml = Get-Content $xmlOut
+                $writeBytes = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.WriteBytes } | Measure-Object -Sum).Sum
+                $writeCount = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.WriteCount } | Measure-Object -Sum).Sum
+                $duration = [double]$xml.Results.TimeSpan.TestTimeSeconds
+                if ($duration -gt 0 -and $writeCount -gt 0) {
+                    $iops = [math]::Round($writeCount / $duration, 0)
+                    $mbps = [math]::Round($writeBytes / $duration / 1MB, 2)
+                    $randWriteResult = "$iops IOPS ($mbps MB/s)"
+                }
+            } catch { $randWriteResult = "Parse error: $_" }
         }
 
         Write-Host "  Running mixed 4K 70R/30W (${BenchmarkDuration}s)..." -ForegroundColor Gray
-        $mixed = & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w30 -Sh -c1G $testFile 2>&1 | Out-String
-        $mixedIOPS = "N/A"
-        if ($mixed -match "Total IO[\s\S]*?total[^\n]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|") {
-            $mixedIOPS = "$($Matches[2]) IOPS ($($Matches[1]) MB/s)"
-        } elseif ($mixed -match "total.*?\|.*?\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)") {
-            $mixedIOPS = "$($Matches[3]) IOPS ($($Matches[2]) MB/s)"
+        & $diskspdPath -b4K -d$BenchmarkDuration -o32 -t2 -r -w30 -Sh -c1G -Rxml $testFile > $xmlOut 2>&1
+        $mixedResult = "N/A"
+        if (Test-Path $xmlOut) {
+            try {
+                [xml]$xml = Get-Content $xmlOut
+                $readCount = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadCount } | Measure-Object -Sum).Sum
+                $writeCount = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.WriteCount } | Measure-Object -Sum).Sum
+                $totalCount = $readCount + $writeCount
+                $readBytes = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.ReadBytes } | Measure-Object -Sum).Sum
+                $writeBytes = ($xml.Results.TimeSpan.Thread | ForEach-Object { $_.Target.WriteBytes } | Measure-Object -Sum).Sum
+                $duration = [double]$xml.Results.TimeSpan.TestTimeSeconds
+                if ($duration -gt 0 -and $totalCount -gt 0) {
+                    $iops = [math]::Round($totalCount / $duration, 0)
+                    $mbps = [math]::Round(($readBytes + $writeBytes) / $duration / 1MB, 2)
+                    $mixedResult = "$iops IOPS ($mbps MB/s, R:$([math]::Round($readCount/$duration,0))/W:$([math]::Round($writeCount/$duration,0)))"
+                }
+            } catch { $mixedResult = "Parse error: $_" }
         }
 
         Write-Host ""
-        Write-Check "Seq Read 128K" "INFO" "$seqReadMBs"
-        Write-Check "Rand Read 4K" "INFO" "$randReadIOPS"
-        Write-Check "Rand Write 4K" "INFO" "$randWriteIOPS"
-        Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedIOPS"
-
-        # Save raw output for debugging if needed
-        $rawOutputPath = "$env:TEMP\diskspd_raw_output.txt"
-        $mixed | Set-Content -Path $rawOutputPath -Encoding UTF8
-        Write-Host "  Raw DiskSpd output saved to: $rawOutputPath" -ForegroundColor Gray
+        Write-Check "Seq Read 128K" "INFO" "$seqReadResult"
+        Write-Check "Rand Read 4K" "INFO" "$randReadResult"
+        Write-Check "Rand Write 4K" "INFO" "$randWriteResult"
+        Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedResult"
 
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $xmlOut -Force -ErrorAction SilentlyContinue
     }
 }
 
