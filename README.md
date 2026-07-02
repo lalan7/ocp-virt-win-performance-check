@@ -9,6 +9,9 @@ Checks that all performance-critical parameters are correctly configured: Hyper-
 Inside the Windows VM (as Administrator):
 
 ```powershell
+# Allow script execution for this session
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
 # Validation only
 .\Test-VMPerformance.ps1
 
