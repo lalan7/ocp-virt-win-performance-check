@@ -22,6 +22,40 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 .\Test-VMPerformance.ps1 -RunBenchmark -BenchmarkDuration 60
 ```
 
+## Host-Side Verification (OpenShift/KVM)
+
+Individual Hyper-V enlightenment parameters (`hv-relaxed`, `hv-vapic`, `hv-spinlocks`, etc.) cannot be fully enumerated from inside the Windows guest. The guest-side script confirms the hypervisor interface is active, but for per-parameter verification, run this from the OpenShift host:
+
+```bash
+# Check all running VMs for missing enlightenments
+oc get vmi -A -o json | python3 -c "
+import json, sys
+expected = {'hv-frequencies','hv-ipi','hv-reenlightenment','hv-relaxed','hv-reset','hv-runtime','hv-spinlocks','hv-stimer','hv-synic','hv-tlbflush','hv-vapic','hv-vpindex'}
+data = json.load(sys.stdin)
+for item in data.get('items', []):
+    ns = item['metadata']['namespace']
+    name = item['metadata']['name']
+    hyperv = item.get('spec',{}).get('domain',{}).get('features',{}).get('hyperv',{})
+    mapping = {'frequencies':'hv-frequencies','ipi':'hv-ipi','reenlightenment':'hv-reenlightenment',
+               'relaxed':'hv-relaxed','reset':'hv-reset','runtime':'hv-runtime','spinlocks':'hv-spinlocks',
+               'synic':'hv-synic','synictimer':'hv-stimer','tlbflush':'hv-tlbflush','vapic':'hv-vapic','vpindex':'hv-vpindex'}
+    found = {mapping[k] for k in hyperv if k in mapping}
+    missing = expected - found
+    if not hyperv:
+        print(f'NO HYPERV: {ns}/{name}')
+    elif missing:
+        print(f'MISSING: {ns}/{name} -> {sorted(missing)}')
+    else:
+        print(f'OK: {ns}/{name} (all 12 enlightenments present)')
+"
+```
+
+Or verify via QEMU command line in virt-launcher logs:
+
+```bash
+oc logs <virt-launcher-pod> -n <namespace> -c compute | grep -oE 'hv-[a-z-]+' | sort -u
+```
+
 ## What It Checks
 
 | Category | Checks |

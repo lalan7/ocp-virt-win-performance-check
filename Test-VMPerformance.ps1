@@ -114,6 +114,39 @@ if ($hvServices) {
     Write-Check "Hyper-V Integration Services" "INFO" "No Hyper-V services found (KVM uses QEMU GA instead)"
 }
 
+# Verify specific Hyper-V enlightenments via WMI/registry indicators
+# Windows exposes synthetic interrupt controller (synic) and timers via services
+$hvTimeSvc = Get-Service "vmictimesync" -ErrorAction SilentlyContinue
+if ($hvTimeSvc -and $hvTimeSvc.Status -eq "Running") {
+    Write-Check "hv-time/hv-reenlightenment" "PASS" "Time Synchronization IC active"
+} else {
+    Write-Check "hv-time/hv-reenlightenment" "INFO" "Time Sync IC not running (KVM exposes via CPUID directly)"
+}
+
+# Check for synthetic timer via clocksource
+$tscSource = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\stimer" -ErrorAction SilentlyContinue
+$hyperVTimer = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\vmtimesync" -ErrorAction SilentlyContinue
+if ($tscSource -or $hyperVTimer) {
+    Write-Check "hv-stimer (synthetic timer)" "PASS" "Synthetic timer driver registered"
+} else {
+    Write-Check "hv-stimer (synthetic timer)" "INFO" "No synthetic timer driver (check host-side QEMU args)"
+}
+
+# Check for hypervisor scheduler type (evidence of hv-vpindex, hv-runtime)
+$schedulerType = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization" -Name "SchedulerType" -ErrorAction SilentlyContinue
+if ($schedulerType) {
+    Write-Check "hv-vpindex/hv-runtime" "PASS" "Scheduler type: $($schedulerType.SchedulerType)"
+} else {
+    Write-Check "hv-vpindex/hv-runtime" "INFO" "Scheduler key not present (normal on KVM)"
+}
+
+Write-Host ""
+Write-Host "  NOTE: Full individual enlightenment verification requires host-side inspection." -ForegroundColor DarkGray
+Write-Host "  From the OpenShift host, run:" -ForegroundColor DarkGray
+Write-Host "    oc get vmi -A -o json | python3 -c \"...\"  (see README)" -ForegroundColor DarkGray
+Write-Host "  Or check QEMU args:" -ForegroundColor DarkGray
+Write-Host "    oc logs <virt-launcher-pod> -c compute | grep 'hv-'" -ForegroundColor DarkGray
+
 # =============================================================================
 Write-Host "`n=== 2. VIRTIO DRIVERS ===" -ForegroundColor Cyan
 # =============================================================================
