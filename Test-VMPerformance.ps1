@@ -299,38 +299,34 @@ if ($RunBenchmark) {
 
     if ($RunBenchmark) {
         $testFile = "$env:TEMP\diskspd_test.dat"
+        $outFile = "$env:TEMP\diskspd_output.txt"
 
         function Invoke-DiskSpd {
-            param([string]$Args, [string]$TestName)
+            param([string[]]$DiskSpdArgs, [string]$TestName)
             Write-Host "  Running $TestName (${BenchmarkDuration}s)..." -ForegroundColor Gray
-            $output = & $diskspdPath $Args.Split(' ') 2>&1 | Out-String
-            try {
-                [xml]$xml = $output
-                $readCount = 0; $writeCount = 0; $readBytes = 0; $writeBytes = 0
-                foreach ($thread in $xml.Results.TimeSpan.Thread) {
-                    $readCount += [long]$thread.Target.ReadCount
-                    $writeCount += [long]$thread.Target.WriteCount
-                    $readBytes += [long]$thread.Target.ReadBytes
-                    $writeBytes += [long]$thread.Target.WriteBytes
-                }
-                $duration = [double]$xml.Results.TimeSpan.TestTimeSeconds
-                $totalCount = $readCount + $writeCount
-                $totalBytes = $readBytes + $writeBytes
-                if ($duration -gt 0 -and $totalCount -gt 0) {
-                    $iops = [math]::Round($totalCount / $duration, 0)
-                    $mbps = [math]::Round($totalBytes / $duration / 1MB, 2)
+            $proc = Start-Process -FilePath $diskspdPath -ArgumentList $DiskSpdArgs -NoNewWindow -Wait -RedirectStandardOutput $outFile -PassThru
+            if ($proc.ExitCode -ne 0) { return "DiskSpd exited with code $($proc.ExitCode)" }
+            $content = Get-Content $outFile -Raw
+            # Parse the "total:" summary line. Format:
+            # total:  |  bytes  |  I/Os  |  MiB/s  |  I/O per s  |  AvgLat  | ...
+            $lines = $content -split "`n" | Where-Object { $_ -match "^\s*total\s*\|" }
+            if ($lines) {
+                $lastLine = ($lines | Select-Object -Last 1).Trim()
+                $fields = $lastLine -split '\|' | ForEach-Object { $_.Trim() }
+                # fields[0]=total, [1]=bytes, [2]=I/Os, [3]=MiB/s, [4]=I/O per s, [5]=AvgLat
+                if ($fields.Count -ge 5) {
+                    $mbps = $fields[3]
+                    $iops = $fields[4]
                     return "$iops IOPS ($mbps MB/s)"
                 }
-                return "No I/O recorded"
-            } catch {
-                return "Parse error: $_"
             }
+            return "Could not parse output"
         }
 
-        $seqReadResult = Invoke-DiskSpd "-b128K -d$BenchmarkDuration -o4 -t2 -r -w0 -Sh -c1G -Rxml $testFile" "sequential read 128K"
-        $randReadResult = Invoke-DiskSpd "-b4K -d$BenchmarkDuration -o32 -t2 -r -w0 -Sh -c1G -Rxml $testFile" "random read 4K"
-        $randWriteResult = Invoke-DiskSpd "-b4K -d$BenchmarkDuration -o32 -t2 -r -w100 -Sh -c1G -Rxml $testFile" "random write 4K"
-        $mixedResult = Invoke-DiskSpd "-b4K -d$BenchmarkDuration -o32 -t2 -r -w30 -Sh -c1G -Rxml $testFile" "mixed 4K 70R/30W"
+        $seqReadResult = Invoke-DiskSpd @("-b128K", "-d$BenchmarkDuration", "-o4", "-t2", "-r", "-w0", "-Sh", "-c1G", $testFile) "sequential read 128K"
+        $randReadResult = Invoke-DiskSpd @("-b4K", "-d$BenchmarkDuration", "-o32", "-t2", "-r", "-w0", "-Sh", "-c1G", $testFile) "random read 4K"
+        $randWriteResult = Invoke-DiskSpd @("-b4K", "-d$BenchmarkDuration", "-o32", "-t2", "-r", "-w100", "-Sh", "-c1G", $testFile) "random write 4K"
+        $mixedResult = Invoke-DiskSpd @("-b4K", "-d$BenchmarkDuration", "-o32", "-t2", "-r", "-w30", "-Sh", "-c1G", $testFile) "mixed 4K 70R/30W"
 
         Write-Host ""
         Write-Check "Seq Read 128K" "INFO" "$seqReadResult"
@@ -339,6 +335,7 @@ if ($RunBenchmark) {
         Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedResult"
 
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $outFile -Force -ErrorAction SilentlyContinue
     }
 }
 
