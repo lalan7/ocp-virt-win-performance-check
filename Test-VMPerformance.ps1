@@ -92,7 +92,8 @@ if ($csProduct.Vendor -match "Red Hat" -or $csProduct.Name -match "OpenShift") {
     Write-Check "Platform detection" "WARN" "Unexpected platform: $($csProduct.Vendor) / $($csProduct.Name)"
 }
 
-$cpuCaption = (Get-CimInstance Win32_Processor).Caption
+$cpuInfo = Get-CimInstance Win32_Processor
+$cpuCaption = ($cpuInfo | Select-Object -First 1).Caption
 Write-Check "CPU model" "INFO" "$cpuCaption"
 
 # Check useplatformclock (should be off for best timer performance)
@@ -257,7 +258,7 @@ Write-Host "`n=== 4. MEMORY & CPU ===" -ForegroundColor Cyan
 $os = Get-CimInstance Win32_OperatingSystem
 $totalRAM = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
 $freeRAM = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
-$cpuCount = (Get-CimInstance Win32_Processor).NumberOfLogicalProcessors
+$cpuCount = ($cpuInfo | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
 Write-Check "Total RAM" "INFO" "${totalRAM} GB"
 Write-Check "Free RAM" "INFO" "${freeRAM} GB"
 Write-Check "Logical CPUs" "INFO" "$cpuCount"
@@ -286,6 +287,10 @@ if ($RunBenchmark) {
             Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\diskspd_extract" -Force
             $exe = Get-ChildItem "$env:TEMP\diskspd_extract" -Recurse -Filter "diskspd.exe" |
                 Where-Object { $_.FullName -match "amd64" } | Select-Object -First 1
+            if (-not $exe) {
+                $exe = Get-ChildItem "$env:TEMP\diskspd_extract" -Recurse -Filter "diskspd.exe" | Select-Object -First 1
+            }
+            if (-not $exe) { throw "diskspd.exe not found in extracted archive" }
             Copy-Item $exe.FullName $diskspdPath
             Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
             Write-Check "DiskSpd download" "PASS" "Downloaded from official Microsoft GitHub"
@@ -322,9 +327,12 @@ if ($RunBenchmark) {
                 $firstLine = ($lines | Select-Object -First 1).Trim()
                 $fields = $firstLine -split '\|' | ForEach-Object { $_.Trim() }
                 if ($fields.Count -ge 4) {
-                    $mbps = [double]$fields[2]
-                    $iops = [double]$fields[3]
-                    return @{ IOPS = $iops; MBps = $mbps }
+                    $mbps = $fields[2] -as [double]
+                    $iops = $fields[3] -as [double]
+                    if ($null -ne $mbps -and $null -ne $iops) {
+                        return @{ IOPS = $iops; MBps = $mbps }
+                    }
+                    return @{ Error = "Non-numeric values in fields: MiB/s='$($fields[2])' IOPS='$($fields[3])'" }
                 }
                 return @{ Error = "Parsed $($fields.Count) fields: $firstLine" }
             }
@@ -348,7 +356,7 @@ if ($RunBenchmark) {
             $display = "{0:N2} IOPS ({1:N2} MiB/s)" -f $iops, $mbps
             $t = $thresholds[$TestName]
             if ($t -and ($iops -lt $t.MinIOPS)) {
-                Write-Check $TestName "WARN" "$display  [below ${($t.MinIOPS)} IOPS floor: check VirtIO driver and disk cache mode]"
+                Write-Check $TestName "WARN" "$display  [below $($t.MinIOPS) IOPS floor: check VirtIO driver and disk cache mode]"
             } else {
                 Write-Check $TestName "PASS" $display
             }
@@ -398,7 +406,6 @@ if ($warned -gt 0) {
 
 Write-Host "`n  References:" -ForegroundColor Gray
 Write-Host "    KCS: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
-Write-Host "    KCS: https://access.redhat.com/articles/7133062" -ForegroundColor Gray
 Write-Host "    Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
 Write-Host ""
 
