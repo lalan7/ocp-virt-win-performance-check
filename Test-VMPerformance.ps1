@@ -294,9 +294,9 @@ foreach ($adapter in $netAdapters) {
     $lso = Get-NetAdapterLso -Name $adapter.Name -ErrorAction SilentlyContinue
     if ($lso) {
         if ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled) {
-            Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload)"
+            Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload active)"
         } else {
-            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable for better network throughput)"
+            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > Offload.Tx.LSO = Maximal). Ref: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines"
         }
     }
 }

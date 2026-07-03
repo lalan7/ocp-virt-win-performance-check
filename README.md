@@ -81,7 +81,7 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 | Power Plan | "Balanced" throttles CPU frequency; "High Performance" prevents p-state transitions |
 | RSS (Receive Side Scaling) | Distributes network interrupt processing across multiple CPUs |
 | Checksum Offload | Offloads TCP/UDP checksum to NIC hardware/driver; reduces CPU usage |
-| LSO/TSO (TCP Segmentation Offload) | Offloads large TCP segment splitting to NIC; improves throughput |
+| LSO/TSO (TCP Segmentation Offload) | Offloads large TCP segment splitting to NIC driver; improves throughput by reducing per-packet CPU overhead. VirtIO NetKVM default is "Maximal" (TCPv4+TCPv6). Enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > `Offload.Tx.LSO` |
 
 **Reference**: [cr0x.net: 8 settings that matter for Windows VMs](https://cr0x.net/en/proxmox-windows-vm-slow-settings/)
 
