@@ -11,6 +11,7 @@
       2. VirtIO driver verification
       3. OS optimization checks
       4. Disk benchmark (DiskSpd)
+      5. Diagnostics (disk, network, drivers, VSS, BitLocker, performance)
 
 .PARAMETER RunBenchmark
     If specified, runs DiskSpd disk benchmark after validation.
@@ -18,18 +19,23 @@
 .PARAMETER BenchmarkDuration
     Duration in seconds for DiskSpd test (default: 30).
 
+.PARAMETER RunDiagnostics
+    If specified, runs troubleshooting diagnostic commands (disk, network, drivers, etc.).
+
 .PARAMETER OutputJson
     If specified, writes results to a JSON file at the given path.
 
 .EXAMPLE
     .\Test-VMPerformance.ps1
     .\Test-VMPerformance.ps1 -RunBenchmark -BenchmarkDuration 60
-    .\Test-VMPerformance.ps1 -RunBenchmark -OutputJson C:\results.json
+    .\Test-VMPerformance.ps1 -RunDiagnostics
+    .\Test-VMPerformance.ps1 -RunBenchmark -RunDiagnostics -OutputJson "$env:TEMP\results.json"
 #>
 
 param(
     [switch]$RunBenchmark,
     [int]$BenchmarkDuration = 30,
+    [switch]$RunDiagnostics,
     [string]$OutputJson
 )
 
@@ -379,6 +385,107 @@ if ($RunBenchmark) {
         Write-Host "        Compare against your own baseline for the same storage class." -ForegroundColor Gray
 
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# =============================================================================
+# 6. DIAGNOSTICS (optional)
+# =============================================================================
+
+if ($RunDiagnostics) {
+    function Write-DiagSection {
+        param([string]$Title)
+        Write-Host "`n  --- $Title ---" -ForegroundColor White
+    }
+
+    function Run-DiagCmd {
+        param([string]$Label, [scriptblock]$Command)
+        Write-Host "  > $Label" -ForegroundColor Gray
+        try {
+            $result = & $Command 2>&1 | Out-String
+            if ($result.Trim()) {
+                $result.Trim().Split("`n") | ForEach-Object { Write-Host "    $_" }
+            } else {
+                Write-Host "    (no output)" -ForegroundColor DarkGray
+            }
+        } catch {
+            Write-Host "    ERROR: $_" -ForegroundColor Red
+        }
+        Write-Host ""
+    }
+
+    Write-Host "`n=== 6. DIAGNOSTICS ===" -ForegroundColor Cyan
+
+    # --- Disk, Boot & File System ---
+    Write-DiagSection "Disk, Boot & File System"
+    Run-DiagCmd "Disk health status" { wmic diskdrive get model,status /format:list }
+    Run-DiagCmd "Volume inventory" { wmic logicaldisk get name,volumename,filesystem,size,freespace /format:list }
+    Run-DiagCmd "Boot Configuration (BCD)" { bcdedit /enum "{current}" }
+
+    # --- Networking ---
+    Write-DiagSection "Networking"
+    Run-DiagCmd "NIC status" { wmic nic where "NetEnabled=TRUE" get name,speed,MACAddress /format:list }
+    Run-DiagCmd "IP configuration" { ipconfig /all }
+    Run-DiagCmd "Routing table" { route print }
+    Run-DiagCmd "Firewall state" { netsh advfirewall show allprofiles state }
+
+    # --- Device Drivers ---
+    Write-DiagSection "Device Drivers"
+    Run-DiagCmd "PnP driver status (VirtIO/QEMU)" {
+        Get-CimInstance Win32_PnPSignedDriver |
+            Where-Object { $_.Manufacturer -match "Red Hat|QEMU|VirtIO" } |
+            Select-Object DeviceName, DriverVersion, Status |
+            Format-Table -AutoSize
+    }
+    Run-DiagCmd "Devices with problems" {
+        Get-CimInstance Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne 0 } |
+            Select-Object Name, ConfigManagerErrorCode | Format-Table -AutoSize
+    }
+
+    # --- Backup & Snapshot (VSS / QEMU-GA) ---
+    Write-DiagSection "Backup & Snapshot"
+    Run-DiagCmd "QEMU Guest Agent status" { sc.exe query QEMU-GA }
+    Run-DiagCmd "VSS Writers" { vssadmin list writers }
+    Run-DiagCmd "VSS Providers" { vssadmin list providers }
+
+    # --- BitLocker & Encryption ---
+    Write-DiagSection "BitLocker & Encryption"
+    Run-DiagCmd "BitLocker status" { manage-bde -status }
+
+    # --- Hibernation & Fast Startup ---
+    Write-DiagSection "Hibernation & Fast Startup"
+    Run-DiagCmd "Available sleep states" { powercfg /a }
+
+    # --- Performance ---
+    Write-DiagSection "Performance Snapshot"
+    Run-DiagCmd "System info (summary)" {
+        $osInfo = Get-CimInstance Win32_OperatingSystem
+        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+        "OS: $($osInfo.Caption) $($osInfo.Version)"
+        "Uptime: $((Get-Date) - $osInfo.LastBootUpTime)"
+        "CPU: $($cpu.Name) ($($cpu.NumberOfLogicalProcessors) cores)"
+        "RAM: $([math]::Round($osInfo.TotalVisibleMemorySize/1MB,1)) GB total, $([math]::Round($osInfo.FreePhysicalMemory/1MB,1)) GB free"
+    }
+    Run-DiagCmd "Top 10 processes by CPU" {
+        Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, Id,
+            @{N="CPU(s)";E={[math]::Round($_.CPU,1)}},
+            @{N="Mem(MB)";E={[math]::Round($_.WS/1MB,1)}} |
+            Format-Table -AutoSize
+    }
+
+    # --- Logs ---
+    Write-DiagSection "Recent Critical/Error Events"
+    Run-DiagCmd "System event log (last 10 errors)" {
+        Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 10 -ErrorAction SilentlyContinue |
+            Select-Object TimeCreated, Id, Message | Format-Table -AutoSize -Wrap
+    }
+
+    # Check for MTV firstboot log
+    $firstbootLog = "$env:SystemDrive\Program Files\Guestfs\Firstboot\log.txt"
+    if (Test-Path $firstbootLog) {
+        Run-DiagCmd "MTV Firstboot log (last 20 lines)" {
+            Get-Content $firstbootLog -Tail 20
+        }
     }
 }
 
