@@ -298,12 +298,23 @@ foreach ($adapter in $netAdapters) {
         }
     }
     $lso = Get-NetAdapterLso -Name $adapter.Name -ErrorAction SilentlyContinue
-    if ($lso) {
-        if ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled) {
-            Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload active)"
-        } else {
-            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > Offload.Tx.LSO = Maximal). Ref: $refOptimize"
+    $lsoEnabled = $false
+    if ($lso -and ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled)) {
+        $lsoEnabled = $true
+    }
+    if (-not $lsoEnabled) {
+        $lsoAdv = Get-NetAdapterAdvancedProperty -Name $adapter.Name -ErrorAction SilentlyContinue |
+            Where-Object { $_.RegistryKeyword -match "LsoV2|LSO" }
+        if ($lsoAdv) {
+            $lsoEnabled = ($lsoAdv | Where-Object { $_.RegistryValue -ne "0" -and $_.DisplayValue -ne "Disabled" }).Count -gt 0
         }
+    }
+    if ($lsoEnabled) {
+        Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload active)"
+    } elseif ($lso -or $lsoAdv) {
+        Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > Offload.Tx.LSO = Maximal). Ref: $refOptimize"
+    } else {
+        Write-Check "LSO/TSO ($($adapter.Name))" "INFO" "Not available on this adapter"
     }
 }
 
