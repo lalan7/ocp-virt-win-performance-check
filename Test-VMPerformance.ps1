@@ -68,6 +68,12 @@ $passed = 0
 $warned = 0
 $failed = 0
 
+# Reference URLs used in WARN/FAIL messages
+$refOptimize = "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines"
+$refKCS = "https://access.redhat.com/articles/4234591"
+$refVirtioWin = "https://github.com/virtio-win/kvm-guest-drivers-windows"
+$refTrimIssue = "https://github.com/virtio-win/kvm-guest-drivers-windows/issues/666"
+
 function Write-Check {
     param([string]$Name, [string]$Status, [string]$Detail)
     $color = switch ($Status) {
@@ -97,7 +103,7 @@ $hypervisorPresent = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
 if ($hypervisorPresent) {
     Write-Check "Hypervisor detected" "PASS" "Guest sees a hypervisor (Hyper-V interface)"
 } else {
-    Write-Check "Hypervisor detected" "FAIL" "No hypervisor detected; enlightenments inactive"
+    Write-Check "Hypervisor detected" "FAIL" "No hypervisor detected; enlightenments inactive. Ref: $refKCS"
     Write-Host "    KCS: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
     Write-Host "    Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
 }
@@ -130,7 +136,7 @@ $bcdOutput = bcdedit /enum "{current}" 2>&1 | Out-String
 if ($bcdOutput -match "useplatformclock\s+No") {
     Write-Check "useplatformclock" "PASS" "Disabled (better timer performance)"
 } elseif ($bcdOutput -match "useplatformclock\s+Yes") {
-    Write-Check "useplatformclock" "WARN" "Enabled; disable with: bcdedit /set useplatformclock No"
+    Write-Check "useplatformclock" "WARN" "Enabled; disable with: bcdedit /set useplatformclock No. Ref: $refOptimize"
 } else {
     Write-Check "useplatformclock" "PASS" "Not set (default=off on Win10+)"
 }
@@ -203,9 +209,9 @@ foreach ($drv in $expectedDrivers) {
         Write-Check "$($drv.Desc)" "PASS" "v$version"
     } else {
         if ($drv.Critical) {
-            Write-Check "$($drv.Desc)" "FAIL" "NOT INSTALLED (critical for performance)"
+            Write-Check "$($drv.Desc)" "FAIL" "NOT INSTALLED (critical for performance). Ref: $refOptimize"
         } else {
-            Write-Check "$($drv.Desc)" "WARN" "Not found (optional)"
+            Write-Check "$($drv.Desc)" "WARN" "Not found (optional). Ref: $refVirtioWin"
         }
     }
 }
@@ -215,9 +221,9 @@ $qga = Get-Service "QEMU-GA" -ErrorAction SilentlyContinue
 if ($qga -and $qga.Status -eq "Running") {
     Write-Check "QEMU Guest Agent" "PASS" "Running"
 } elseif ($qga) {
-    Write-Check "QEMU Guest Agent" "WARN" "Installed but $($qga.Status)"
+    Write-Check "QEMU Guest Agent" "WARN" "Installed but $($qga.Status). Ref: $refOptimize"
 } else {
-    Write-Check "QEMU Guest Agent" "WARN" "Not installed (provides metadata exchange with host)"
+    Write-Check "QEMU Guest Agent" "WARN" "Not installed (provides metadata exchange with host). Ref: $refOptimize"
 }
 
 # =============================================================================
@@ -229,7 +235,7 @@ $wsearch = Get-Service "WSearch" -ErrorAction SilentlyContinue
 if (-not $wsearch -or $wsearch.Status -ne "Running") {
     Write-Check "Windows Search" "PASS" "Disabled/Stopped"
 } else {
-    Write-Check "Windows Search" "WARN" "Running (disable: Set-Service WSearch -StartupType Disabled; Stop-Service WSearch)"
+    Write-Check "Windows Search" "WARN" "Running (disable: Set-Service WSearch -StartupType Disabled; Stop-Service WSearch). Ref: $refOptimize"
 }
 
 # SysMain (Superfetch)
@@ -237,7 +243,7 @@ $sysmain = Get-Service "SysMain" -ErrorAction SilentlyContinue
 if (-not $sysmain -or $sysmain.Status -ne "Running") {
     Write-Check "SysMain (Superfetch)" "PASS" "Disabled/Stopped"
 } else {
-    Write-Check "SysMain (Superfetch)" "WARN" "Running (disable: Set-Service SysMain -StartupType Disabled; Stop-Service SysMain)"
+    Write-Check "SysMain (Superfetch)" "WARN" "Running (disable: Set-Service SysMain -StartupType Disabled; Stop-Service SysMain). Ref: $refOptimize"
 }
 
 # Scheduled Defrag
@@ -245,7 +251,7 @@ $defrag = Get-ScheduledTask -TaskName "ScheduledDefrag" -ErrorAction SilentlyCon
 if ($defrag -and $defrag.State -eq "Disabled") {
     Write-Check "Scheduled Defrag" "PASS" "Disabled (not needed on virtual disks)"
 } elseif ($defrag) {
-    Write-Check "Scheduled Defrag" "WARN" "Enabled (disable: Disable-ScheduledTask -TaskName 'ScheduledDefrag')"
+    Write-Check "Scheduled Defrag" "WARN" "Enabled (disable: Disable-ScheduledTask -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag'). Ref: $refOptimize"
 } else {
     Write-Check "Scheduled Defrag" "PASS" "Not found"
 }
@@ -263,7 +269,7 @@ $powerPlan = (powercfg /getactivescheme) -replace '.*:\s+', '' -replace '\s+\(.*
 if ($powerPlan -match "High performance|8c5e7fda") {
     Write-Check "Power Plan" "PASS" "High Performance"
 } else {
-    Write-Check "Power Plan" "WARN" "Current: $powerPlan (fix: powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c)"
+    Write-Check "Power Plan" "WARN" "Current: $powerPlan (fix: powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c). Ref: $refOptimize"
 }
 
 # Network RSS
@@ -274,7 +280,7 @@ foreach ($adapter in $netAdapters) {
     if ($rss -and $rss.RegistryValue -eq "1") {
         Write-Check "RSS ($($adapter.Name))" "PASS" "Enabled"
     } elseif ($rss) {
-        Write-Check "RSS ($($adapter.Name))" "WARN" "Disabled (enable: Set-NetAdapterAdvancedProperty -Name '$($adapter.Name)' -RegistryKeyword '*RSS' -RegistryValue 1)"
+        Write-Check "RSS ($($adapter.Name))" "WARN" "Disabled (enable: Set-NetAdapterAdvancedProperty -Name '$($adapter.Name)' -RegistryKeyword '*RSS' -RegistryValue 1). Ref: $refOptimize"
     } else {
         Write-Check "RSS ($($adapter.Name))" "INFO" "Property not available"
     }
@@ -288,7 +294,7 @@ foreach ($adapter in $netAdapters) {
         if ($txEnabled) {
             Write-Check "Checksum Offload ($($adapter.Name))" "PASS" "Enabled"
         } else {
-            Write-Check "Checksum Offload ($($adapter.Name))" "WARN" "Disabled (reduces CPU usage when enabled)"
+            Write-Check "Checksum Offload ($($adapter.Name))" "WARN" "Disabled (reduces CPU usage when enabled). Ref: $refOptimize"
         }
     }
     $lso = Get-NetAdapterLso -Name $adapter.Name -ErrorAction SilentlyContinue
@@ -296,7 +302,7 @@ foreach ($adapter in $netAdapters) {
         if ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled) {
             Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload active)"
         } else {
-            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > Offload.Tx.LSO = Maximal). Ref: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines"
+            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable via Device Manager > Red Hat VirtIO Ethernet Adapter > Advanced > Offload.Tx.LSO = Maximal). Ref: $refOptimize"
         }
     }
 }
@@ -310,7 +316,7 @@ $trimStatus = fsutil behavior query DisableDeleteNotify 2>&1 | Out-String
 if ($trimStatus -match "DisableDeleteNotify\s*=\s*0") {
     Write-Check "TRIM (DisableDeleteNotify)" "PASS" "Enabled (TRIM/unmap commands sent to storage)"
 } elseif ($trimStatus -match "DisableDeleteNotify\s*=\s*1") {
-    Write-Check "TRIM (DisableDeleteNotify)" "WARN" "Disabled (enable: fsutil behavior set DisableDeleteNotify 0)"
+    Write-Check "TRIM (DisableDeleteNotify)" "WARN" "Disabled (enable: fsutil behavior set DisableDeleteNotify 0). Ref: $refTrimIssue"
 } else {
     Write-Check "TRIM (DisableDeleteNotify)" "INFO" "Could not determine TRIM status"
 }
@@ -324,7 +330,7 @@ if ($virtioStorage) {
     Write-Check "Storage Controller" "PASS" "VirtIO: $drvNames"
 } else {
     $otherDrvs = ($storageDrivers | ForEach-Object { $_.DeviceName }) -join ", "
-    Write-Check "Storage Controller" "WARN" "Non-VirtIO detected: $otherDrvs (emulated = slower)"
+    Write-Check "Storage Controller" "WARN" "Non-VirtIO detected: $otherDrvs (emulated = slower). Ref: $refOptimize"
 }
 
 # Pagefile location
@@ -403,7 +409,7 @@ if ($visualFx -and $visualFx.VisualFXSetting -eq 2) {
 } elseif ($visualFx -and $visualFx.VisualFXSetting -eq 3) {
     Write-Check "Visual Effects" "INFO" "Custom settings"
 } else {
-    Write-Check "Visual Effects" "WARN" "Not optimized (set to 'Best Performance': SystemPropertiesPerformance.exe)"
+    Write-Check "Visual Effects" "WARN" "Not optimized (set to 'Best Performance': SystemPropertiesPerformance.exe). Ref: $refOptimize"
 }
 
 # Timer resolution (high-res timers increase power/CPU usage)
@@ -500,7 +506,7 @@ if ($RunBenchmark) {
             $display = "{0:N2} IOPS ({1:N2} MiB/s)" -f $iops, $mbps
             $t = $thresholds[$TestName]
             if ($t -and ($iops -lt $t.MinIOPS)) {
-                Write-Check $TestName "WARN" "$display  [below $($t.MinIOPS) IOPS floor: check VirtIO driver and disk cache mode]"
+                Write-Check $TestName "WARN" "$display  [below $($t.MinIOPS) IOPS floor: check VirtIO driver and disk cache mode]. Ref: $refOptimize"
             } else {
                 Write-Check $TestName "PASS" $display
             }
