@@ -418,13 +418,24 @@ if ($RunDiagnostics) {
 
     # --- Disk, Boot & File System ---
     Write-DiagSection "Disk, Boot & File System"
-    Run-DiagCmd "Disk health status" { wmic diskdrive get model,status /format:list }
-    Run-DiagCmd "Volume inventory" { wmic logicaldisk get name,volumename,filesystem,size,freespace /format:list }
+    Run-DiagCmd "Disk health status" {
+        Get-CimInstance Win32_DiskDrive | Select-Object Model, MediaType, Status, Size |
+            Format-Table -AutoSize
+    }
+    Run-DiagCmd "Volume inventory" {
+        Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, VolumeName, FileSystem,
+            @{N="Size(GB)";E={[math]::Round($_.Size/1GB,1)}},
+            @{N="Free(GB)";E={[math]::Round($_.FreeSpace/1GB,1)}} |
+            Format-Table -AutoSize
+    }
     Run-DiagCmd "Boot Configuration (BCD)" { bcdedit /enum "{current}" }
 
     # --- Networking ---
     Write-DiagSection "Networking"
-    Run-DiagCmd "NIC status" { wmic nic where "NetEnabled=TRUE" get name,speed,MACAddress /format:list }
+    Run-DiagCmd "NIC status" {
+        Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.NetEnabled } |
+            Select-Object Name, Speed, MACAddress | Format-Table -AutoSize
+    }
     Run-DiagCmd "IP configuration" { ipconfig /all }
     Run-DiagCmd "Routing table" { route print }
     Run-DiagCmd "Firewall state" { netsh advfirewall show allprofiles state }
