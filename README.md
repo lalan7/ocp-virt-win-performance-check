@@ -4,6 +4,16 @@ PowerShell validation and benchmark tool for Windows VMs running on OpenShift Vi
 
 Checks that all performance-critical parameters are correctly configured: Hyper-V enlightenments, VirtIO drivers, OS tuning, storage optimization, and optional disk I/O benchmarks.
 
+> **DISCLAIMER**
+>
+> This script is **NOT supported, endorsed, or maintained by Red Hat, Inc.** It is a community/personal tool provided AS-IS with no warranty of any kind, express or implied.
+>
+> - For official Red Hat support, open a support case: https://access.redhat.com/support/cases/
+> - **Do NOT run in production** without prior testing in a non-production environment.
+> - **Review this script** against your organization's security, compliance, change management, and legal policies before execution.
+> - The authors accept **no liability** for any damage, data loss, service disruption, or policy violation resulting from use of this script.
+> - This script makes **no changes** to your system by default. The `-RunBenchmark` flag creates a temporary test file (auto-cleaned). The `-RunDiagnostics` flag performs read-only queries only.
+
 ## Quick Start
 
 Inside the Windows VM (as Administrator):

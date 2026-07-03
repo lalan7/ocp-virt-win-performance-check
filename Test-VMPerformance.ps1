@@ -13,6 +13,19 @@
       4. Disk benchmark (DiskSpd)
       5. Diagnostics (disk, network, drivers, VSS, BitLocker, performance)
 
+.NOTES
+    DISCLAIMER: This script is NOT supported, endorsed, or maintained by Red Hat, Inc.
+    It is a community/personal tool provided AS-IS with no warranty of any kind.
+
+    - For official support, open a Red Hat support case: https://access.redhat.com/support/cases/
+    - Do NOT run this script in production without prior testing in a non-production environment.
+    - Review this script against your organization's security, compliance, and change management
+      policies before execution.
+    - The authors accept no liability for any damage, data loss, or policy violation resulting
+      from the use of this script.
+    - This script makes NO changes to your system by default. The -RunDiagnostics and
+      -RunBenchmark flags perform read-only operations and temporary file creation only.
+
 .PARAMETER RunBenchmark
     If specified, runs DiskSpd disk benchmark after validation.
 
@@ -38,6 +51,16 @@ param(
     [switch]$RunDiagnostics,
     [string]$OutputJson
 )
+
+# --- Disclaimer ---
+Write-Host ""
+Write-Host "  ========================================================================" -ForegroundColor DarkYellow
+Write-Host "  DISCLAIMER: This tool is NOT supported or endorsed by Red Hat, Inc." -ForegroundColor Yellow
+Write-Host "  For official support: https://access.redhat.com/support/cases/" -ForegroundColor DarkYellow
+Write-Host "  Use at your own risk. Test in non-production first." -ForegroundColor DarkYellow
+Write-Host "  Ensure compliance with your organization's security and legal policies." -ForegroundColor DarkYellow
+Write-Host "  ========================================================================" -ForegroundColor DarkYellow
+Write-Host ""
 
 $ErrorActionPreference = "Continue"
 $results = @()
