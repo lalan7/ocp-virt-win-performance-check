@@ -306,29 +306,26 @@ if ($RunBenchmark) {
             $allArgs = $DiskSpdArgs + @($testFile)
             $output = & $diskspdPath $allArgs 2>&1 | Out-String
 
-            # Parse the "total:" summary line from DiskSpd text output
-            # Format: total:  |  <bytes>  |  <I/Os>  |  <MiB/s>  |  <I/O per s>  |  <AvgLat>  | ...
-            $lines = $output -split [Environment]::NewLine | Where-Object { $_ -match "^\s*total\s*\|" }
-            if (-not $lines) {
-                # Try alternate line ending
-                $lines = $output -split "`n" | Where-Object { $_ -match "^\s*total\s*\|" }
-            }
+            # DiskSpd text output format:
+            #   thread |  bytes  |  I/Os  |  MiB/s  |  I/O per s  |  AvgLat  | ...
+            #   total:   <bytes>  |  <I/Os>  |  <MiB/s>  |  <I/O per s>  |  <AvgLat>  | ...
+            # Note: "total:" is followed by bytes THEN pipe, not a pipe immediately
+            $lines = $output -split "`r?`n" | Where-Object { $_ -match "^\s*total:" }
             if ($lines) {
                 $lastLine = ($lines | Select-Object -Last 1).Trim()
                 $fields = $lastLine -split '\|' | ForEach-Object { $_.Trim() }
-                if ($fields.Count -ge 5) {
-                    $mbps = $fields[3]
-                    $iops = $fields[4]
+                # fields[0] = "total: <bytes>", [1] = I/Os, [2] = MiB/s, [3] = I/O per s, [4] = AvgLat
+                if ($fields.Count -ge 4) {
+                    $mbps = $fields[2]
+                    $iops = $fields[3]
                     return "$iops IOPS ($mbps MiB/s)"
                 }
                 return "Parsed $($fields.Count) fields: $lastLine"
             }
 
-            # If parsing failed, check if DiskSpd printed help (wrong args)
             if ($output -match "Usage:") {
                 return "ERROR: DiskSpd printed usage help (bad arguments)"
             }
-            # Save output for debugging
             $debugFile = "$env:TEMP\diskspd_debug.txt"
             $output | Set-Content -Path $debugFile -Encoding UTF8
             return "Could not parse output (saved to $debugFile)"
