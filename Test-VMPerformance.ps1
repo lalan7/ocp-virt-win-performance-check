@@ -257,6 +257,83 @@ foreach ($adapter in $netAdapters) {
     }
 }
 
+# Network offload settings (TSO, checksum, LRO)
+foreach ($adapter in $netAdapters) {
+    $offloadProps = Get-NetAdapterChecksumOffload -Name $adapter.Name -ErrorAction SilentlyContinue
+    if ($offloadProps) {
+        $txEnabled = $offloadProps.TcpIPv4 -ne "Disabled" -or $offloadProps.UdpIPv4 -ne "Disabled"
+        if ($txEnabled) {
+            Write-Check "Checksum Offload ($($adapter.Name))" "PASS" "Enabled"
+        } else {
+            Write-Check "Checksum Offload ($($adapter.Name))" "WARN" "Disabled (reduces CPU usage when enabled)"
+        }
+    }
+    $lso = Get-NetAdapterLso -Name $adapter.Name -ErrorAction SilentlyContinue
+    if ($lso) {
+        if ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled) {
+            Write-Check "LSO/TSO ($($adapter.Name))" "PASS" "Enabled (TCP segmentation offload)"
+        } else {
+            Write-Check "LSO/TSO ($($adapter.Name))" "WARN" "Disabled (enable for better network throughput)"
+        }
+    }
+}
+
+# =============================================================================
+Write-Host "`n=== 3b. STORAGE OPTIMIZATION ===" -ForegroundColor Cyan
+# =============================================================================
+
+# TRIM/Discard support
+$trimStatus = fsutil behavior query DisableDeleteNotify 2>&1 | Out-String
+if ($trimStatus -match "DisableDeleteNotify\s*=\s*0") {
+    Write-Check "TRIM (DisableDeleteNotify)" "PASS" "Enabled (TRIM/unmap commands sent to storage)"
+} elseif ($trimStatus -match "DisableDeleteNotify\s*=\s*1") {
+    Write-Check "TRIM (DisableDeleteNotify)" "WARN" "Disabled (enable: fsutil behavior set DisableDeleteNotify 0)"
+} else {
+    Write-Check "TRIM (DisableDeleteNotify)" "INFO" "Could not determine TRIM status"
+}
+
+# Storage controller driver in use
+$storageDrivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+    Where-Object { $_.DeviceClass -eq "SCSIAdapter" -or $_.DeviceClass -eq "HDC" }
+$virtioStorage = $storageDrivers | Where-Object { $_.DeviceName -match "VirtIO|vioscsi|viostor" }
+if ($virtioStorage) {
+    $drvNames = ($virtioStorage | ForEach-Object { $_.DeviceName }) -join ", "
+    Write-Check "Storage Controller" "PASS" "VirtIO: $drvNames"
+} else {
+    $otherDrvs = ($storageDrivers | ForEach-Object { $_.DeviceName }) -join ", "
+    Write-Check "Storage Controller" "WARN" "Non-VirtIO detected: $otherDrvs (emulated = slower)"
+}
+
+# Pagefile location
+$pagefiles = Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue
+if ($pagefiles) {
+    foreach ($pf in $pagefiles) {
+        Write-Check "Pagefile" "INFO" "$($pf.Name) (InitialSize=$($pf.InitialSize)MB, MaxSize=$($pf.MaximumSize)MB)"
+    }
+} else {
+    $autoPagefile = Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty AutomaticManagedPagefile
+    if ($autoPagefile) {
+        Write-Check "Pagefile" "INFO" "System managed (automatic)"
+    } else {
+        Write-Check "Pagefile" "INFO" "No pagefile configured"
+    }
+}
+
+# Disk queue length (current snapshot)
+$diskCounters = Get-Counter '\PhysicalDisk(*)\Current Disk Queue Length' -ErrorAction SilentlyContinue
+if ($diskCounters) {
+    $samples = $diskCounters.CounterSamples | Where-Object { $_.InstanceName -ne "_total" -and $_.CookedValue -gt 0 }
+    if ($samples) {
+        foreach ($s in $samples) {
+            $qLen = [math]::Round($s.CookedValue, 1)
+            $status = if ($qLen -gt 4) { "WARN" } else { "INFO" }
+            Write-Check "Disk Queue ($($s.InstanceName))" $status "Queue depth: $qLen $(if ($qLen -gt 4) {'(high: possible I/O bottleneck)'})"
+        }
+    } else {
+        Write-Check "Disk Queue" "PASS" "No outstanding I/O (idle)"
+    }
+}
+
 # =============================================================================
 Write-Host "`n=== 4. MEMORY & CPU ===" -ForegroundColor Cyan
 # =============================================================================
@@ -274,6 +351,44 @@ if ($balloonSvc -and $balloonSvc.Status -eq "Running") {
     Write-Check "Balloon Service" "PASS" "Running (memory ballooning active)"
 } else {
     Write-Check "Balloon Service" "INFO" "Not running"
+}
+
+# Memory compression (Windows 10+, can conflict with balloon)
+$memCompression = Get-MMAgent -ErrorAction SilentlyContinue
+if ($memCompression) {
+    if ($memCompression.MemoryCompression) {
+        Write-Check "Memory Compression" "INFO" "Enabled (Windows compresses before paging; may conflict with balloon)"
+    } else {
+        Write-Check "Memory Compression" "PASS" "Disabled"
+    }
+}
+
+# NUMA topology
+$numaNodes = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Count
+$numaInfo = Get-CimInstance Win32_NumaNode -ErrorAction SilentlyContinue
+if ($numaInfo) {
+    $nodeCount = ($numaInfo | Measure-Object).Count
+    Write-Check "NUMA Nodes" "INFO" "$nodeCount node(s) visible to guest"
+} else {
+    Write-Check "NUMA Nodes" "INFO" "Single node (flat memory)"
+}
+
+# Visual effects (animations waste CPU in VMs)
+$visualFx = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue
+if ($visualFx -and $visualFx.VisualFXSetting -eq 2) {
+    Write-Check "Visual Effects" "PASS" "Set to 'Best Performance'"
+} elseif ($visualFx -and $visualFx.VisualFXSetting -eq 3) {
+    Write-Check "Visual Effects" "INFO" "Custom settings"
+} else {
+    Write-Check "Visual Effects" "WARN" "Not optimized (set to 'Best Performance': SystemPropertiesPerformance.exe)"
+}
+
+# Timer resolution (high-res timers increase power/CPU usage)
+$timerRes = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" -Name "GlobalTimerResolutionRequests" -ErrorAction SilentlyContinue
+if ($timerRes -and $timerRes.GlobalTimerResolutionRequests -gt 0) {
+    Write-Check "Timer Resolution" "INFO" "High-resolution timer requested ($($timerRes.GlobalTimerResolutionRequests) apps)"
+} else {
+    Write-Check "Timer Resolution" "PASS" "Default timer resolution (no high-res requests)"
 }
 
 # =============================================================================

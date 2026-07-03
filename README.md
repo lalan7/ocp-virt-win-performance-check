@@ -2,7 +2,7 @@
 
 PowerShell validation and benchmark tool for Windows VMs running on OpenShift Virtualization (KVM/QEMU).
 
-Checks that all performance-critical parameters are correctly configured: Hyper-V enlightenments, VirtIO drivers, OS tuning, and optional disk I/O benchmarks.
+Checks that all performance-critical parameters are correctly configured: Hyper-V enlightenments, VirtIO drivers, OS tuning, storage optimization, and optional disk I/O benchmarks.
 
 ## Quick Start
 
@@ -20,11 +20,111 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
 # Longer benchmark for more accurate results
 .\Test-VMPerformance.ps1 -RunBenchmark -BenchmarkDuration 60
+
+# Run troubleshooting diagnostics
+.\Test-VMPerformance.ps1 -RunDiagnostics
+
+# Everything
+.\Test-VMPerformance.ps1 -RunBenchmark -RunDiagnostics -OutputJson "$env:TEMP\results.json"
 ```
+
+## What It Checks
+
+### 1. Hyper-V Enlightenments
+
+| Check | Why It Matters |
+|---|---|
+| Hypervisor presence | Confirms Windows sees the KVM hypervisor via Hyper-V interface (CPUID leaf 0x40000000) |
+| SMBIOS platform (Red Hat/OpenShift) | Validates the VM is running on OpenShift Virtualization, not another hypervisor |
+| `useplatformclock` | When enabled, forces Windows to use a slow platform timer instead of TSC. Should be off |
+| Hyper-V Integration Services | Running services indicate enlightenment features are active |
+| hv-time/hv-reenlightenment | Time synchronization IC provides accurate guest clock and handles TSC frequency changes during live migration |
+| hv-stimer (synthetic timer) | Low-latency timer interrupts without expensive VM exits |
+| hv-vpindex/hv-runtime | Virtual processor index and runtime tracking enable better guest scheduling |
+
+**Reference**: [Red Hat: Optimizing Windows VMs (Hyper-V Enlightenments)](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines)
+
+### 2. VirtIO Drivers
+
+| Driver | Purpose | Impact if Missing |
+|---|---|---|
+| viostor | VirtIO block storage | Falls back to emulated IDE (10x slower) |
+| vioscsi | VirtIO SCSI controller | No SCSI multiqueue, no TRIM/unmap |
+| netkvm | VirtIO network (NetKVM) | Falls back to emulated e1000 (1Gbps cap, high CPU) |
+| vioser | VirtIO serial | No serial console communication |
+| balloon | VirtIO memory ballooning | Host cannot reclaim unused guest memory |
+| vioinput | VirtIO input | Mouse/keyboard via emulated USB (higher latency) |
+| viogpudo | VirtIO GPU | No paravirt display |
+| viorng | VirtIO RNG | Slow entropy generation (affects crypto, SSH keygen) |
+| viofs | VirtIO filesystem | No shared folders with host |
+| QEMU Guest Agent | Management agent | No graceful shutdown, no IP reporting, no VSS quiesce for snapshots |
+
+**Reference**: [Red Hat: Installing VirtIO drivers](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines)
+
+### 3. OS Optimization
+
+| Check | Why It Matters |
+|---|---|
+| Windows Search (WSearch) | Indexes files continuously, causing random I/O spikes on virtual disks |
+| SysMain/Superfetch | Prefetches data to RAM based on usage patterns; pointless in VMs with volatile memory |
+| Scheduled Defrag | Defragments disks on schedule; unnecessary on virtual disks (host storage handles layout) |
+| Power Plan | "Balanced" throttles CPU frequency; "High Performance" prevents p-state transitions |
+| RSS (Receive Side Scaling) | Distributes network interrupt processing across multiple CPUs |
+| Checksum Offload | Offloads TCP/UDP checksum to NIC hardware/driver; reduces CPU usage |
+| LSO/TSO (TCP Segmentation Offload) | Offloads large TCP segment splitting to NIC; improves throughput |
+
+**Reference**: [cr0x.net: 8 settings that matter for Windows VMs](https://cr0x.net/en/proxmox-windows-vm-slow-settings/)
+
+### 3b. Storage Optimization
+
+| Check | Why It Matters |
+|---|---|
+| TRIM (DisableDeleteNotify) | When enabled (value=0), Windows sends TRIM/unmap commands to reclaim deleted blocks. Critical for thin-provisioned storage to prevent bloat |
+| Storage Controller type | VirtIO SCSI/Block vs emulated IDE. Emulated IDE has no multiqueue, no TRIM, 10x slower |
+| Pagefile location | Pagefile should be on VirtIO disk, not an emulated device |
+| Disk Queue Length | High queue depth (>4) at rest indicates I/O bottleneck or missing IOThreads on host |
+
+**Reference**: [virtio-win issue #666: TRIM/Discard optimization](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/666) (set `discard_granularity=32M` on host for fast TRIM)
+
+### 4. Memory & CPU
+
+| Check | Why It Matters |
+|---|---|
+| Balloon Service | Enables host to reclaim unused guest memory dynamically |
+| Memory Compression | Windows 10+ compresses pages before swapping; may conflict with balloon driver |
+| NUMA Topology | Guest should see correct NUMA layout matching host for optimal memory locality |
+| Visual Effects | Animations, transparency, and smooth scrolling waste CPU in headless/VM scenarios |
+| Timer Resolution | Apps requesting high-res timers (1ms) increase interrupt rate and power usage |
+
+**Reference**: [SmolVM: Windows Guest Deep Dive](https://github.com/celestoai/smolvm/blob/main/docs/deep-dive/windows-guest-qemu.md)
+
+### 5. Disk Benchmark (DiskSpd)
+
+| Test | Pattern | What It Measures |
+|---|---|---|
+| Seq Read 128K | Sequential, large block, 100% read | Throughput (streaming reads, backups, large file copies) |
+| Rand Read 4K | Random, small block, 100% read | IOPS (database reads, OS boot, app loading) |
+| Rand Write 4K | Random, small block, 100% write | IOPS (database writes, logging, journaling) |
+| Mixed 4K 70R/30W | Random, small block, 70% read / 30% write | Real-world mixed workload (typical application I/O) |
+
+**Reference**: [Microsoft DiskSpd](https://github.com/microsoft/diskspd), [Proxmox Benchmark Tutorial](https://forum.proxmox.com/threads/proxmox-ve-7-2-benchmark-aio-native-io_uring-and-iothreads.116755/)
+
+### 6. Diagnostics (`-RunDiagnostics`)
+
+| Category | Commands |
+|---|---|
+| Disk, Boot & FS | Disk health, volume inventory, BCD boot config |
+| Networking | NIC status, IP config, routing table, firewall state |
+| Device Drivers | VirtIO/QEMU PnP drivers, devices with problems |
+| Backup & Snapshot | QEMU Guest Agent, VSS writers/providers |
+| BitLocker | Encryption status for all volumes |
+| Hibernation | Available sleep states (should show hibernation off) |
+| Performance | System info, top 10 processes by CPU |
+| Logs | Last 10 system errors (24h), MTV firstboot log |
 
 ## Host-Side Verification (OpenShift/KVM)
 
-Individual Hyper-V enlightenment parameters (`hv-relaxed`, `hv-vapic`, `hv-spinlocks`, etc.) cannot be fully enumerated from inside the Windows guest. The guest-side script confirms the hypervisor interface is active, but for per-parameter verification, run this from the OpenShift host:
+Individual Hyper-V enlightenment parameters cannot be fully enumerated from inside the Windows guest. For per-parameter verification, run from the OpenShift host:
 
 ```bash
 # Check all running VMs for missing enlightenments
@@ -50,83 +150,30 @@ for item in data.get('items', []):
 "
 ```
 
-Or verify via QEMU command line in virt-launcher logs:
+### Host-Side Performance Tuning Checklist
 
-```bash
-oc logs <virt-launcher-pod> -n <namespace> -c compute | grep -oE 'hv-[a-z-]+' | sort -u
-```
+These settings are configured on the OpenShift/KVM host (not inside the guest) and have significant impact on Windows VM performance:
 
-## What It Checks
+| Setting | Recommended | Impact |
+|---|---|---|
+| IOThreads | 1 per disk | Moves I/O off VCPU thread; ~15% latency improvement at QD=1 |
+| Disk cache | `cache=none` | Prevents double-caching (host page cache + guest cache) |
+| AIO mode | `native` (raw block) or `io_uring` (file-backed) | Async I/O; `threads` is legacy and slow |
+| Discard | `discard=unmap, detect-zeroes=unmap` | Passes TRIM to host; qcow2 files shrink |
+| discard_granularity | `32M` | Fixes 10-15 min defrag times (matches Hyper-V behavior) |
+| CPU model | `host-passthrough` or `host-model` | Exposes host CPU features; required for some enlightenments |
+| Machine type | q35 | Modern chipset; required for PCIe, IOMMU groups |
+| Hugepages | Optional (1-2% gain) | Static 1 GiB hugepages beat THP slightly under contention |
+| CPU pinning | Optional (single-digit % gain) | Only helps under host contention; reduces scheduler flexibility |
 
-| Category | Checks |
-|---|---|
-| Hyper-V Enlightenments | Hypervisor presence, SMBIOS platform (Red Hat/OpenShift), `useplatformclock` status |
-| VirtIO Drivers | viostor, vioscsi, netkvm, balloon, vioserial, vioinput, viorng, viofs, QEMU Guest Agent |
-| OS Optimization | Windows Search, SysMain/Superfetch, Scheduled Defrag, Power Plan, RSS offload |
-| Memory/CPU | RAM total/free, CPU count, Balloon service status |
-| Disk Benchmark | DiskSpd: sequential read 128K, random read/write 4K IOPS, mixed 70R/30W |
-
-## Expected Results (VirtIO + Hyper-V Enlightenments, NVMe backend)
-
-| Metric | Expected Range |
-|---|---|
-| Seq Read 128K | 1,000+ MB/s |
-| Rand Read 4K | 30,000+ IOPS |
-| Rand Write 4K | 40,000+ IOPS |
-| Mixed 4K 70R/30W | 35,000+ IOPS |
-
-Results will vary based on storage backend (local NVMe vs. networked storage like Ceph/ODF).
-
-## Output Example
-
-```
-=== 1. HYPER-V ENLIGHTENMENTS ===
-  [PASS] Hypervisor detected - Guest sees a hypervisor (Hyper-V interface)
-  [PASS] Platform detection - Running on OpenShift Virtualization
-  [PASS] useplatformclock - Not set (default=off on Win10+)
-
-=== 2. VIRTIO DRIVERS ===
-  [PASS] VirtIO Block Storage - v100.92.104.24500
-  [PASS] VirtIO Network (NetKVM) - v100.92.104.24500
-  [PASS] VirtIO Balloon (memory) - v100.92.104.24500
-  [PASS] QEMU Guest Agent - Running
-
-=== 3. OS OPTIMIZATION ===
-  [PASS] Windows Search - Disabled/Stopped
-  [PASS] SysMain (Superfetch) - Disabled/Stopped
-  [WARN] Power Plan - Current: Balanced (set High Performance: powercfg /setactive 8c5e7fda-...)
-
-=== SUMMARY ===
-  Passed: 12 | Warnings: 1 | Failed: 0
-```
-
-## Getting the Script into the VM
-
-**Option 1: Copy-paste** via VNC console into PowerShell ISE.
-
-**Option 2: Download** (if VM has internet):
-```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/<user>/ocp-virt-win-performance-check/main/Test-VMPerformance.ps1" -OutFile .\Test-VMPerformance.ps1
-```
-
-**Option 3: virtctl** (from host):
-```bash
-# Upload via guest agent (requires qemu-ga running in the VM)
-virtctl ssh -n <namespace> <vm-name> -- powershell -Command "Set-Content -Path C:\Test-VMPerformance.ps1 -Value (Get-Content -Raw -Path /dev/stdin)" < Test-VMPerformance.ps1
-```
-
-## Why These Checks Matter
-
-Windows on KVM without proper configuration can lose 30-50% performance vs. bare metal:
-
-- **Missing VirtIO drivers**: Falls back to emulated IDE/e1000 (10x slower I/O)
-- **Missing Hyper-V enlightenments**: Windows uses expensive trap-and-emulate paths instead of paravirt fast paths
-- **Background services**: Windows Search, SysMain, Defrag cause unpredictable I/O spikes on virtual disks
-- **Wrong power plan**: "Balanced" throttles CPU frequency in VMs
+**References**:
+- [Blockbridge: aio=native vs io_uring benchmark](https://kb.blockbridge.com/technote/proxmox-aio-vs-iouring/)
+- [Proxmox Forum: IOThreads benchmark](https://forum.proxmox.com/threads/proxmox-ve-7-2-benchmark-aio-native-io_uring-and-iothreads.116755/)
+- [Medium: Improving Windows on QEMU](https://leduccc.medium.com/improving-the-performance-of-a-windows-10-guest-on-qemu-a5b3f54d9cf5)
 
 ## Benchmark Thresholds
 
-The script uses minimum floor thresholds to detect misconfigured storage (emulated disk, missing VirtIO, wrong cache mode). Results below these values trigger a `WARN`:
+The script uses minimum floor thresholds to detect misconfigured storage. Results below these values trigger a `WARN`:
 
 | Test | Floor (IOPS) | Typical Local NVMe | Typical ODF/Ceph RBD | Typical NFS |
 |---|---|---|---|---|
@@ -143,14 +190,35 @@ Results above the floor get `PASS`. Actual performance depends on:
 
 Compare against your own baseline for the same storage class.
 
+## Getting the Script into the VM
+
+**Option 1: Download** (if VM has internet):
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lalan7/ocp-virt-win-performance-check/main/Test-VMPerformance.ps1" -OutFile "$env:TEMP\Test-VMPerformance.ps1" -UseBasicParsing
+& "$env:TEMP\Test-VMPerformance.ps1" -RunBenchmark
+```
+
+**Option 2: Copy-paste** via VNC/RDP console into PowerShell ISE.
+
+**Option 3: virtctl** (from host):
+```bash
+virtctl ssh -n <namespace> <vm-name> -- powershell -Command "Set-Content -Path C:\Test-VMPerformance.ps1 -Value (Get-Content -Raw -Path /dev/stdin)" < Test-VMPerformance.ps1
+```
+
 ## References
 
 | Resource | URL |
 |---|---|
-| Red Hat: Optimizing Windows VMs | https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines |
+| Red Hat: Optimizing Windows VMs (RHEL 10) | https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines |
 | Red Hat: Certified Guest OS (Windows) | https://access.redhat.com/articles/4234591 |
 | Microsoft: DiskSpd | https://github.com/microsoft/diskspd |
 | KubeVirt: Hyper-V Enlightenments | https://kubevirt.io/user-guide/user_workloads/guest_operating_system_information/ |
+| Proxmox: aio/IOThread benchmark | https://forum.proxmox.com/threads/proxmox-ve-7-2-benchmark-aio-native-io_uring-and-iothreads.116755/ |
+| Blockbridge: aio=native vs io_uring | https://kb.blockbridge.com/technote/proxmox-aio-vs-iouring/ |
+| cr0x.net: 8 Windows VM settings | https://cr0x.net/en/proxmox-windows-vm-slow-settings/ |
+| SmolVM: Windows Guest QEMU deep dive | https://github.com/celestoai/smolvm/blob/main/docs/deep-dive/windows-guest-qemu.md |
+| Medium: Windows 11 on QEMU performance | https://leduccc.medium.com/improving-the-performance-of-a-windows-10-guest-on-qemu-a5b3f54d9cf5 |
+| virtio-win: TRIM/Discard fix (issue #666) | https://github.com/virtio-win/kvm-guest-drivers-windows/issues/666 |
 
 ## Requirements
 
