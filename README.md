@@ -124,6 +124,25 @@ Windows on KVM without proper configuration can lose 30-50% performance vs. bare
 - **Background services**: Windows Search, SysMain, Defrag cause unpredictable I/O spikes on virtual disks
 - **Wrong power plan**: "Balanced" throttles CPU frequency in VMs
 
+## Benchmark Thresholds
+
+The script uses minimum floor thresholds to detect misconfigured storage (emulated disk, missing VirtIO, wrong cache mode). Results below these values trigger a `WARN`:
+
+| Test | Floor (IOPS) | Typical Local NVMe | Typical ODF/Ceph RBD | Typical NFS |
+|---|---|---|---|---|
+| Seq Read 128K | 400 | 4,000-16,000+ | 1,500-6,000 | 500-2,000 |
+| Rand Read 4K | 1,000 | 10,000-100,000+ | 5,000-30,000 | 1,000-5,000 |
+| Rand Write 4K | 500 | 10,000-80,000+ | 2,000-15,000 | 500-3,000 |
+| Mixed 4K 70R/30W | 500 | 8,000-60,000+ | 3,000-20,000 | 1,000-4,000 |
+
+Results above the floor get `PASS`. Actual performance depends on:
+- **Storage backend**: local NVMe > SAN/FC > ODF/Ceph RBD > NFS
+- **Network**: 10GbE vs 25GbE vs storage-dedicated network
+- **Cache mode**: `writeback` vs `writethrough` vs `none`
+- **Queue depth and threads**: configured in DiskSpd via `-o` and `-t`
+
+Compare against your own baseline for the same storage class.
+
 ## References
 
 | Resource | URL |

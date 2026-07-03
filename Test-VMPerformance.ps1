@@ -300,35 +300,58 @@ if ($RunBenchmark) {
     if ($RunBenchmark) {
         $testFile = "$env:TEMP\diskspd_test.dat"
 
+        # Minimum floor thresholds: below these values indicates misconfiguration
+        # (emulated disk, missing VirtIO, wrong cache mode)
+        $thresholds = @{
+            "Seq Read 128K"    = @{ MinIOPS = 400;  MinMBps = 50 }
+            "Rand Read 4K"     = @{ MinIOPS = 1000; MinMBps = 4 }
+            "Rand Write 4K"    = @{ MinIOPS = 500;  MinMBps = 2 }
+            "Mixed 4K 70R/30W" = @{ MinIOPS = 500;  MinMBps = 2 }
+        }
+
         function Invoke-DiskSpd {
             param([string[]]$DiskSpdArgs, [string]$TestName)
             Write-Host "  Running $TestName (${BenchmarkDuration}s)..." -ForegroundColor Gray
             $allArgs = $DiskSpdArgs + @($testFile)
             $output = & $diskspdPath $allArgs 2>&1 | Out-String
 
-            # DiskSpd text output format:
-            #   thread |  bytes  |  I/Os  |  MiB/s  |  I/O per s  |  AvgLat  | ...
-            #   total:   <bytes>  |  <I/Os>  |  <MiB/s>  |  <I/O per s>  |  <AvgLat>  | ...
-            # Note: "total:" is followed by bytes THEN pipe, not a pipe immediately
+            # DiskSpd text output: Total IO section appears first, then Read IO, Write IO
+            # Format: total:  <bytes>  |  <I/Os>  |  <MiB/s>  |  <I/O per s>  |  <AvgLat>  | ...
             $lines = $output -split "`r?`n" | Where-Object { $_ -match "^\s*total:" }
             if ($lines) {
                 $firstLine = ($lines | Select-Object -First 1).Trim()
                 $fields = $firstLine -split '\|' | ForEach-Object { $_.Trim() }
-                # fields[0] = "total: <bytes>", [1] = I/Os, [2] = MiB/s, [3] = I/O per s, [4] = AvgLat
                 if ($fields.Count -ge 4) {
-                    $mbps = $fields[2]
-                    $iops = $fields[3]
-                    return "$iops IOPS ($mbps MiB/s)"
+                    $mbps = [double]$fields[2]
+                    $iops = [double]$fields[3]
+                    return @{ IOPS = $iops; MBps = $mbps }
                 }
-                return "Parsed $($fields.Count) fields: $firstLine"
+                return @{ Error = "Parsed $($fields.Count) fields: $firstLine" }
             }
 
             if ($output -match "Usage:") {
-                return "ERROR: DiskSpd printed usage help (bad arguments)"
+                return @{ Error = "DiskSpd printed usage help (bad arguments)" }
             }
             $debugFile = "$env:TEMP\diskspd_debug.txt"
             $output | Set-Content -Path $debugFile -Encoding UTF8
-            return "Could not parse output (saved to $debugFile)"
+            return @{ Error = "Could not parse output (saved to $debugFile)" }
+        }
+
+        function Format-BenchResult {
+            param([hashtable]$Result, [string]$TestName)
+            if ($Result.Error) {
+                Write-Check $TestName "FAIL" $Result.Error
+                return
+            }
+            $iops = $Result.IOPS
+            $mbps = $Result.MBps
+            $display = "{0:N2} IOPS ({1:N2} MiB/s)" -f $iops, $mbps
+            $t = $thresholds[$TestName]
+            if ($t -and ($iops -lt $t.MinIOPS)) {
+                Write-Check $TestName "WARN" "$display  [below ${($t.MinIOPS)} IOPS floor: check VirtIO driver and disk cache mode]"
+            } else {
+                Write-Check $TestName "PASS" $display
+            }
         }
 
         $baseArgs = @("-d$BenchmarkDuration", "-Sh", "-c1G")
@@ -338,10 +361,14 @@ if ($RunBenchmark) {
         $mixedResult = Invoke-DiskSpd ($baseArgs + @("-b4K", "-o32", "-t2", "-r", "-w30")) "mixed 4K 70R/30W"
 
         Write-Host ""
-        Write-Check "Seq Read 128K" "INFO" "$seqReadResult"
-        Write-Check "Rand Read 4K" "INFO" "$randReadResult"
-        Write-Check "Rand Write 4K" "INFO" "$randWriteResult"
-        Write-Check "Mixed 4K 70R/30W" "INFO" "$mixedResult"
+        Format-BenchResult $seqReadResult "Seq Read 128K"
+        Format-BenchResult $randReadResult "Rand Read 4K"
+        Format-BenchResult $randWriteResult "Rand Write 4K"
+        Format-BenchResult $mixedResult "Mixed 4K 70R/30W"
+        Write-Host ""
+        Write-Host "  NOTE: Results depend on storage backend (local NVMe > SAN > ODF/Ceph RBD > NFS)." -ForegroundColor Gray
+        Write-Host "        Floor thresholds detect misconfiguration only (emulated disk, missing VirtIO)." -ForegroundColor Gray
+        Write-Host "        Compare against your own baseline for the same storage class." -ForegroundColor Gray
 
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
     }
