@@ -312,15 +312,15 @@ if ($RunBenchmark) {
             # Note: "total:" is followed by bytes THEN pipe, not a pipe immediately
             $lines = $output -split "`r?`n" | Where-Object { $_ -match "^\s*total:" }
             if ($lines) {
-                $lastLine = ($lines | Select-Object -Last 1).Trim()
-                $fields = $lastLine -split '\|' | ForEach-Object { $_.Trim() }
+                $firstLine = ($lines | Select-Object -First 1).Trim()
+                $fields = $firstLine -split '\|' | ForEach-Object { $_.Trim() }
                 # fields[0] = "total: <bytes>", [1] = I/Os, [2] = MiB/s, [3] = I/O per s, [4] = AvgLat
                 if ($fields.Count -ge 4) {
                     $mbps = $fields[2]
                     $iops = $fields[3]
                     return "$iops IOPS ($mbps MiB/s)"
                 }
-                return "Parsed $($fields.Count) fields: $lastLine"
+                return "Parsed $($fields.Count) fields: $firstLine"
             }
 
             if ($output -match "Usage:") {
@@ -369,7 +369,10 @@ if ($warned -gt 0) {
     }
 }
 
-Write-Host "`n  Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
+Write-Host "`n  References:" -ForegroundColor Gray
+Write-Host "    KCS: https://access.redhat.com/articles/4234591" -ForegroundColor Gray
+Write-Host "    KCS: https://access.redhat.com/articles/7133062" -ForegroundColor Gray
+Write-Host "    Docs: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_and_managing_windows_virtual_machines/optimizing-windows-virtual-machines" -ForegroundColor Gray
 Write-Host ""
 
 # Export JSON if requested
